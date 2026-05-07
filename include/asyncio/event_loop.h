@@ -88,6 +88,12 @@ class EventLoop {
   /// Returns the current time from a monotonic clock.
   [[nodiscard]] std::chrono::steady_clock::time_point Time() const;
 
+  // --- Global access ---
+
+  /// Returns the event loop associated with the current thread.
+  /// Returns nullptr if no loop is running on this thread.
+  [[nodiscard]] static EventLoop* Current();
+
  private:
   /// Drains the thread-safe queue into the ready deque.
   /// Called from RunOnce() on the event loop thread.

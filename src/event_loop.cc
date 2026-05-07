@@ -8,6 +8,10 @@
 
 namespace asyncio {
 
+namespace {
+thread_local EventLoop* current_loop = nullptr;
+}  // namespace
+
 EventLoop::EventLoop() = default;
 
 EventLoop::~EventLoop() = default;
@@ -15,6 +19,8 @@ EventLoop::~EventLoop() = default;
 // --- Lifecycle ---
 
 void EventLoop::RunForever() {
+  auto* prev = current_loop;
+  current_loop = this;
   running_ = true;
   stopping_ = false;
   while (!stopping_) {
@@ -22,6 +28,7 @@ void EventLoop::RunForever() {
   }
   running_ = false;
   stopping_ = false;
+  current_loop = prev;
 }
 
 void EventLoop::RunOnce() {
@@ -159,5 +166,9 @@ void EventLoop::ProcessTimers() {
     }
   }
 }
+
+// --- Global access ---
+
+EventLoop* EventLoop::Current() { return current_loop; }
 
 }  // namespace asyncio

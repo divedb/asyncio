@@ -14,6 +14,7 @@ add_library(asyncio
   src/detail/timer_heap.cc
   src/detail/self_pipe.cc
   src/event_loop.cc
+  src/sleep.cc
 )
 
 target_include_directories(asyncio PUBLIC
