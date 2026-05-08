@@ -59,11 +59,14 @@
   - [x] `Done()` — 是否已完成
   - [x] `Result()` — 获取结果（未完成则抛异常）
   - [x] `GetException()` — 获取异常指针
+- [x] `TaskGroup` — 结构化并发原语（对应 `asyncio.TaskGroup`，Python 3.11+）
+  - [x] `TaskGroup::CreateTask(coro)` — 创建子任务
+  - [x] `TaskGroup::WaitComplete()` — 等待所有子任务完成
+  - [x] `TaskGroup::CancelAll()` — 取消所有子任务
+  - [x] 析构时取消所有子任务
+  - [x] 异常传播：任一子任务失败自动取消其他任务
 - [ ] `GetCurrentTask()` — 获取当前正在运行的 Task（对应 `asyncio.current_task()`）
 - [ ] `GetAllTasks(loop)` — 获取循环中所有 Task（对应 `asyncio.all_tasks()`）
-- [ ] `TaskGroup` — 结构化并发原语（对应 `asyncio.TaskGroup`，Python 3.11+）
-  - [ ] `TaskGroup::CreateTask(coro)`
-  - [ ] `TaskGroup` 析构时等待所有子 Task 完成或取消
 
 ### 1.4 等待与组合原语
 对应 Python `asyncio.wait`、`asyncio.gather`、`asyncio.shield`、`asyncio.wait_for`。
@@ -542,7 +545,7 @@
 | 8. Selector 抽象层 + 平台后端 | [x] **已完成** | 2026-05-08 |
 | 9. Runners（Run, Runner） | [x] **已完成** | 2026-05-08 |
 | 10. EventLoopPolicy + 全局便捷函数 | [x] **已完成** | 2026-05-08 |
-| 11. TaskGroup 结构化并发 | [ ] **待开始** | - |
+| 11. TaskGroup 结构化并发 | [x] **已完成** | 2026-05-08 |
 | 12. 低层 Socket I/O（SockRecv/SockSendall 等） | [ ] **待开始** | - |
 | 13. Queue 补充（PutNowait/GetNowait/Priority/Lifo） | [ ] **待开始** | - |
 | 14. TimeoutAt | [ ] **待开始** | - |

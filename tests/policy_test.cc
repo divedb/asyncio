@@ -165,7 +165,7 @@ TEST(PolicyTest, RunSetsRunningLoop) {
   SetEventLoopPolicy(std::make_unique<DefaultEventLoopPolicy>());
   running_loop_check_flag = false;
 
-  int result = asyncio::Run(CoroutineWithRunningLoopCheck);
+  int result = asyncio::Run<int>(CoroutineWithRunningLoopCheck);
   EXPECT_EQ(result, 42);
   EXPECT_TRUE(running_loop_check_flag);
 }

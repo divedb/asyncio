@@ -25,11 +25,48 @@ namespace asyncio {
 ///
 /// This is the top-level entry point, analogous to Python's `asyncio.run()`.
 ///
-/// \param coro_factory  A callable that returns a Task<T>. The callable is
-///                      invoked AFTER the EventLoop is set up as current.
+/// \param coro_factory  A callable that returns a Task<T>.
 /// \return              The result of the coroutine.
 template <typename T>
 T Run(Task<T> (*coro_factory)()) {
+  EventLoop loop;
+
+  // Set this loop as current BEFORE the coroutine starts.
+  EventLoop* prev = EventLoop::Current();
+  EventLoop::SetCurrent(&loop);
+
+  // Set this loop as the "running" loop so that GetRunningLoop() works
+  // inside the coroutine body (before RunForever() is called).
+  EventLoopPolicy::SetRunningLoop(&loop);
+
+  // Create the task (this starts the coroutine body).
+  Task<T> task = coro_factory();
+
+  // Arrange to stop the loop when the task completes.
+  task.AddDoneCallback([&loop](Future<T>&) { loop.Stop(); });
+
+  // If the task did not complete synchronously, run the loop.
+  if (!task.Done()) {
+    loop.RunForever();  // RunForever also sets/clears the running loop.
+  }
+
+  // Clear the running loop marker.
+  EventLoopPolicy::SetRunningLoop(nullptr);
+
+  // Restore the previous current loop (before loop is destroyed).
+  EventLoop::SetCurrent(prev);
+
+  // Propagate any exception stored in the Task/Future.
+  return task.Result();
+}
+
+/// Overload for generic callable (lambdas, std::function, etc.).
+/// The return type is auto, so callers can use:
+///   auto result = asyncio::Run([&]() -> Task<int> { ... });
+/// or:
+///   asyncio::Run<void>([&]() -> Task<void> { ... });
+template <typename T, typename Factory>
+T Run(Factory&& coro_factory) {
   EventLoop loop;
 
   // Set this loop as current BEFORE the coroutine starts.
@@ -85,6 +122,23 @@ class Runner {
   /// \return              The result of the coroutine.
   template <typename T>
   T Run(Task<T> (*coro_factory)()) {
+    // Create the task (this starts the coroutine body).
+    Task<T> task = coro_factory();
+
+    // Arrange to stop the loop when the task completes.
+    task.AddDoneCallback([this](Future<T>&) { loop_->Stop(); });
+
+    // If the task did not complete synchronously, run the loop.
+    if (!task.Done()) {
+      loop_->RunForever();
+    }
+
+    return task.Result();
+  }
+
+  /// Overload for generic callable (lambdas, etc.).
+  template <typename T, typename Factory>
+  T Run(Factory&& coro_factory) {
     // Create the task (this starts the coroutine body).
     Task<T> task = coro_factory();
 
