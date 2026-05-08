@@ -22,6 +22,8 @@ add_library(asyncio
   src/stream/stream_reader.cc
   src/stream/stream_writer.cc
   src/stream/connection.cc
+  src/socket/socket_base.cc
+  src/socket/socket_ops.cc
 )
 
 # Platform-specific Selector backend.
@@ -52,6 +54,8 @@ endif()
 # Platform-specific libraries for self_pipe / networking
 if(APPLE)
   target_link_libraries(asyncio PUBLIC "-framework CoreFoundation")
+elseif(WIN32)
+  target_link_libraries(asyncio PUBLIC ws2_32 mswsock)
 elseif(UNIX)
   target_link_libraries(asyncio PUBLIC pthread)
 endif()
