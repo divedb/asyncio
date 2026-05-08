@@ -13,9 +13,20 @@ add_library(asyncio
   src/timer_handle.cc
   src/detail/timer_heap.cc
   src/detail/self_pipe.cc
+  src/detail/selector_select.cc
   src/event_loop.cc
   src/sleep.cc
 )
+
+# Platform-specific Selector backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_sources(asyncio PRIVATE src/detail/selector_epoll.cc)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR
+       CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR
+       CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" OR
+       CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+  target_sources(asyncio PRIVATE src/detail/selector_kqueue.cc)
+endif()
 
 target_include_directories(asyncio PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

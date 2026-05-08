@@ -3,7 +3,6 @@
 #include "asyncio/event_loop.h"
 
 #include <algorithm>
-#include <thread>
 #include <utility>
 
 namespace asyncio {
@@ -12,9 +11,17 @@ namespace {
 thread_local EventLoop* current_loop = nullptr;
 }  // namespace
 
-EventLoop::EventLoop() = default;
+EventLoop::EventLoop()
+    : selector_(std::make_unique<detail::DefaultSelector>()) {
+  // Register the self-pipe read end so that CallSoonThreadsafe() can
+  // unblock a blocking Select() call from another thread.
+  selector_->Register(self_pipe_.ReadFd(), detail::kReadable);
+}
 
-EventLoop::~EventLoop() = default;
+EventLoop::~EventLoop() {
+  // Unregister self-pipe before it's destroyed.
+  selector_->Unregister(self_pipe_.ReadFd());
+}
 
 // --- Lifecycle ---
 
@@ -35,9 +42,7 @@ void EventLoop::RunOnce() {
   // 1. Clean up cancelled timers (lazy, amortized).
   scheduled_.MaybeRebuild();
 
-  // 2. Compute how long to wait for I/O.
-  //    In Milestone 1 we only have the self-pipe, so we compute a timeout
-  //    based on whether there is ready work and/or pending timers.
+  // 2. Compute how long the selector should wait for I/O events.
   std::optional<std::chrono::nanoseconds> select_timeout;
   if (!ready_.empty()) {
     // Ready work exists — poll only, don't block.
@@ -58,31 +63,39 @@ void EventLoop::RunOnce() {
   }
   // else: select_timeout remains nullopt — block indefinitely.
 
-  // 3. Poll self-pipe for cross-thread wakeups.
-  //    In a full implementation this would be selector_->Select(timeout).
-  //    For Milestone 1 we do a targeted wait.
-  if (select_timeout.has_value() && *select_timeout == std::chrono::nanoseconds::zero()) {
-    // Non-blocking: just drain any pending bytes.
-    ProcessSelfPipe();
-  } else if (select_timeout.has_value()) {
-    // Wait for the computed timeout, then check the self-pipe.
-    std::this_thread::sleep_for(*select_timeout);
-    ProcessSelfPipe();
-  } else {
-    // No work at all — block until woken by another thread.
-    // In a real implementation, selector_->Select() would block here.
-    // For Milestone 1, we sleep briefly and check.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    ProcessSelfPipe();
+  // 3. Wait for I/O readiness (or timeout).
+  auto io_events = selector_->Select(select_timeout);
+
+  // 4. Dispatch I/O events.
+  for (const auto& ev : io_events) {
+    // Handle self-pipe wakeup.
+    if (ev.fd == self_pipe_.ReadFd()) {
+      self_pipe_.Drain();
+      DrainThreadSafeQueue();
+      continue;
+    }
+
+    auto it = io_callbacks_.find(ev.fd);
+    if (it == io_callbacks_.end()) continue;
+
+    if (ev.readable() && it->second.read_cb) {
+      // Schedule callback rather than calling directly, so that I/O
+      // callbacks have the same deferred semantics as CallSoon callbacks.
+      ready_.emplace_back(it->second.read_cb);
+    }
+    if (ev.writable() && it->second.write_cb) {
+      ready_.emplace_back(it->second.write_cb);
+    }
   }
 
-  // 4. Drain thread-safe queue into ready_.
+  // 5. Drain any thread-safe callbacks that arrived without a self-pipe
+  //    wakeup (e.g., before selector blocked).
   DrainThreadSafeQueue();
 
-  // 5. Move expired timers from scheduled_ to ready_.
+  // 6. Move expired timers from scheduled_ to ready_.
   ProcessTimers();
 
-  // 6. Run exactly ntodo callbacks, where ntodo is captured before
+  // 7. Run exactly ntodo callbacks, where ntodo is captured before
   //    execution starts. Callbacks scheduled during execution are deferred
   //    to the next tick.
   int ntodo = static_cast<int>(ready_.size());
@@ -134,6 +147,44 @@ Handle EventLoop::CallSoonThreadsafe(std::function<void()> callback) {
   return Handle();
 }
 
+// --- I/O registration ---
+
+void EventLoop::AddReader(int fd, std::function<void()> callback) {
+  auto& cbs = io_callbacks_[fd];
+  cbs.read_cb = std::move(callback);
+  UpdateSelectorRegistration(fd);
+}
+
+void EventLoop::RemoveReader(int fd) {
+  auto it = io_callbacks_.find(fd);
+  if (it == io_callbacks_.end()) return;
+  it->second.read_cb = nullptr;
+  if (!it->second.write_cb) {
+    selector_->Unregister(fd);
+    io_callbacks_.erase(it);
+  } else {
+    UpdateSelectorRegistration(fd);
+  }
+}
+
+void EventLoop::AddWriter(int fd, std::function<void()> callback) {
+  auto& cbs = io_callbacks_[fd];
+  cbs.write_cb = std::move(callback);
+  UpdateSelectorRegistration(fd);
+}
+
+void EventLoop::RemoveWriter(int fd) {
+  auto it = io_callbacks_.find(fd);
+  if (it == io_callbacks_.end()) return;
+  it->second.write_cb = nullptr;
+  if (!it->second.read_cb) {
+    selector_->Unregister(fd);
+    io_callbacks_.erase(it);
+  } else {
+    UpdateSelectorRegistration(fd);
+  }
+}
+
 // --- Time ---
 
 std::chrono::steady_clock::time_point EventLoop::Time() const {
@@ -153,8 +204,6 @@ void EventLoop::DrainThreadSafeQueue() {
   }
 }
 
-void EventLoop::ProcessSelfPipe() { self_pipe_.Drain(); }
-
 void EventLoop::ProcessTimers() {
   auto now = Time();
   while (!scheduled_.Empty()) {
@@ -164,6 +213,29 @@ void EventLoop::ProcessTimers() {
     if (!handle.Cancelled()) {
       ready_.emplace_back(std::move(handle));
     }
+  }
+}
+
+void EventLoop::UpdateSelectorRegistration(int fd) {
+  auto it = io_callbacks_.find(fd);
+  if (it == io_callbacks_.end()) return;
+
+  uint32_t events = 0;
+  if (it->second.read_cb) events |= detail::kReadable;
+  if (it->second.write_cb) events |= detail::kWritable;
+
+  // Check whether this fd is already in the selector's registered map
+  // by attempting a Modify first; fall back to Register if not found.
+  // We track this via a simple sentinel: newly added fds are Registered,
+  // existing ones are Modified.
+  //
+  // A cleaner solution would be to expose IsRegistered(), but to keep
+  // the Selector interface minimal we use a try/catch approach here.
+  try {
+    selector_->Modify(fd, events);
+  } catch (const std::invalid_argument&) {
+    // Not registered yet — do a fresh Register.
+    selector_->Register(fd, events);
   }
 }
 

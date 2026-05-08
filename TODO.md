@@ -230,8 +230,10 @@
     - [ ] `Time()` — 当前事件循环时间（`std::chrono::steady_clock::time_point`）
     - [ ] `Now()` — 同上（别名）
   - [ ] **I/O**
-    - [ ] `AddReader(fd, callback)` / `RemoveReader(fd)`
-    - [ ] `AddWriter(fd, callback)` / `RemoveWriter(fd)`
+  - [ ] `AddReader(fd, callback)` / `RemoveReader(fd)`
+    - [x] 基础实现完成，已集成 Selector 后端
+  - [ ] `AddWriter(fd, callback)` / `RemoveWriter(fd)`
+    - [x] 基础实现完成，已集成 Selector 后端
     - [ ] `SockRecv(sock, n)` — 异步 socket 接收（对应 `loop.sock_recv()`）
     - [ ] `SockSendall(sock, data)` — 异步 socket 发送（对应 `loop.sock_sendall()`）
     - [ ] `SockConnect(sock, addr)` — 异步 socket 连接（对应 `loop.sock_connect()`）
@@ -387,14 +389,15 @@
   - [ ] 降级: `socketpair()`
 
 ### 5.2 Selector 抽象层
-- [ ] `Selector` 抽象接口
-  - [ ] `Register(fd, events, data)` — 注册文件描述符
-  - [ ] `Modify(fd, events, data)` — 修改注册事件
-  - [ ] `Unregister(fd)` — 取消注册
-  - [ ] `Select(timeout)` — 等待 I/O 事件，返回就绪列表
-- [ ] `EpollSelector` — Linux epoll 实现
-- [ ] `KqueueSelector` — macOS/BSD kqueue 实现
-- [ ] `SelectSelector` — `select()` 可移植降级实现
+- [x] `Selector` 抽象接口（`include/asyncio/detail/selector.h`）
+  - [x] `Register(fd, events)` — 注册文件描述符
+  - [x] `Modify(fd, events)` — 修改注册事件
+  - [x] `Unregister(fd)` — 取消注册（no-op if not registered）
+  - [x] `Select(timeout)` — 等待 I/O 事件，返回就绪列表
+- [x] `EpollSelector` — Linux epoll 实现
+- [x] `KqueueSelector` — macOS/BSD kqueue 实现
+- [x] `SelectSelector` — `select()` 可移植降级实现
+- [x] `DefaultSelector` — 编译期自动选择最优后端（`selector_backend.h`）
 - [ ] `IocpSelector` — Windows IOCP 实现（可选）
 
 ### 5.3 Task 驱动逻辑
@@ -438,7 +441,7 @@
 - [ ] `StreamReaderTest` — Read/ReadUntil/ReadExactly/ReadLine、背压
 - [ ] `StreamWriterTest` — Write/Drain、背压控制
 - [ ] `ConnectionTest` — 回环 socket 对，echo 测试
-- [ ] `SelectorTest` — 各后端 Register/Modify/Unregister、select 超时精度
+- [x] `SelectorTest` — 各后端 Register/Modify/Unregister、select 超时精度、EventLoop I/O 集成
 
 ### 6.2 示例程序
 - [ ] `hello_coroutine.cc` — 基本协程、co_return、事件循环
@@ -475,6 +478,6 @@
 | 4. 异步 I/O: Streams | [ ] 待开始 | |
 | 5. 低层 API: Event Loop, Handle, Future | [ ] 待开始 | |
 | 6. 低层 API: Transports/Protocols, Policies | [ ] 待开始 | |
-| 7. Selector 抽象层 + 平台后端 | [ ] 待开始 | |
+| 7. Selector 抽象层 + 平台后端 | [x] **已完成** | 2026-05-08 |
 | 8. 测试 | [ ] 待开始 | |
 | 9. 文档 | [ ] 待开始 | |

@@ -7,12 +7,16 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "asyncio/handle.h"
 #include "asyncio/timer_handle.h"
+#include "asyncio/detail/selector.h"
+#include "asyncio/detail/selector_backend.h"
 #include "asyncio/detail/self_pipe.h"
 #include "asyncio/detail/timer_heap.h"
 
@@ -24,10 +28,13 @@ namespace asyncio {
 ///   - A ready deque for immediate callbacks (FIFO).
 ///   - A timer min-heap for delayed callbacks (earliest deadline first).
 ///
+/// I/O multiplexing is delegated to a platform-specific Selector backend
+/// (kqueue on macOS, epoll on Linux, select() as fallback).
+///
 /// Each call to RunOnce() performs one "tick":
 ///   1. Clean up cancelled timers (lazy).
 ///   2. Compute selector timeout.
-///   3. Poll the self-pipe for cross-thread wakeups.
+///   3. Call selector_->Select(timeout) to wait for I/O / timer expiry.
 ///   4. Move expired timers to the ready deque.
 ///   5. Run exactly N callbacks, where N is the ready deque size captured
 ///      before execution starts (new callbacks are deferred to the next tick).
@@ -83,6 +90,28 @@ class EventLoop {
   /// Uses the self-pipe to wake the event loop.
   Handle CallSoonThreadsafe(std::function<void()> callback);
 
+  // --- I/O registration ---
+
+  /// Registers fd for read-ready notifications.
+  /// Calls callback whenever fd becomes readable.
+  /// NOT thread-safe. Must be called from the event loop thread.
+  void AddReader(int fd, std::function<void()> callback);
+
+  /// Removes a previously registered read callback for fd.
+  /// No-op if fd was not registered for reading.
+  /// NOT thread-safe.
+  void RemoveReader(int fd);
+
+  /// Registers fd for write-ready notifications.
+  /// Calls callback whenever fd becomes writable.
+  /// NOT thread-safe.
+  void AddWriter(int fd, std::function<void()> callback);
+
+  /// Removes a previously registered write callback for fd.
+  /// No-op if fd was not registered for writing.
+  /// NOT thread-safe.
+  void RemoveWriter(int fd);
+
   // --- Time ---
 
   /// Returns the current time from a monotonic clock.
@@ -99,11 +128,11 @@ class EventLoop {
   /// Called from RunOnce() on the event loop thread.
   void DrainThreadSafeQueue();
 
-  /// Processes self-pipe events (reads and discards wake bytes).
-  void ProcessSelfPipe();
-
   /// Moves all expired timers from scheduled_ to ready_.
   void ProcessTimers();
+
+  /// Updates the selector registration for fd based on current io_callbacks_.
+  void UpdateSelectorRegistration(int fd);
 
   // --- State ---
 
@@ -113,8 +142,19 @@ class EventLoop {
   /// Delayed callback min-heap, ordered by deadline.
   detail::TimerHeap scheduled_;
 
-  /// Cross-thread wakeup mechanism.
+  /// Platform I/O multiplexer.
+  std::unique_ptr<detail::Selector> selector_;
+
+  /// Cross-thread wakeup mechanism (self-pipe read end is registered in
+  /// the selector).
   detail::SelfPipe self_pipe_;
+
+  /// I/O callbacks indexed by fd.
+  struct IoCallbacks {
+    std::function<void()> read_cb;
+    std::function<void()> write_cb;
+  };
+  std::unordered_map<int, IoCallbacks> io_callbacks_;
 
   /// Thread-safe callback queue. Populated by CallSoonThreadsafe(),
   /// drained by RunOnce().
