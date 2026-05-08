@@ -48,6 +48,20 @@ class QueueShutDownError : public AsyncError {
   QueueShutDownError() : AsyncError("Queue is shut down") {}
 };
 
+/// Thrown when a non-blocking Put() is called on a full bounded queue.
+/// Mirrors Python's `asyncio.QueueFull`.
+class QueueFullError : public AsyncError {
+ public:
+  QueueFullError() : AsyncError("Queue is full") {}
+};
+
+/// Thrown when a non-blocking Get() is called on an empty queue.
+/// Mirrors Python's `asyncio.QueueEmpty`.
+class QueueEmptyError : public AsyncError {
+ public:
+  QueueEmptyError() : AsyncError("Queue is empty") {}
+};
+
 /// Thrown when StreamReader::ReadExactly() cannot read the exact number
 /// of bytes before EOF.
 class IncompleteReadError : public AsyncError {

@@ -147,17 +147,22 @@
   - [x] `AsyncQueue(max_size=0)` — 0 表示无界
   - [x] `Put(item)` — 满时阻塞，返回 `Future<void>`
   - [x] `Get()` — 空时阻塞，返回 `Task<T>`
-  - [ ] `PutNowait(item)` — 非阻塞 Put，满时抛 `QueueFull`
-  - [ ] `GetNowait()` — 非阻塞 Get，空时抛 `QueueEmpty`
+  - [x] `PutNowait(item)` — 非阻塞 Put，满时抛 `QueueFull`
+  - [x] `GetNowait()` — 非阻塞 Get，空时抛 `QueueEmpty`
   - [x] `Size()` — 当前队列大小
   - [x] `Empty()` / `Full()` — 查询状态
   - [x] `TaskDone()` — 标记一个元素已处理（配合 `Join()`）
   - [x] `Join()` — 返回 `Future<void>`，所有 Put 的元素都被 TaskDone 后完成
   - [x] `Shutdown()` — 关闭队列，唤醒所有等待者并抛 `QueueShutDownError`
-- [ ] `AsyncPriorityQueue<T>` 类（对应 `asyncio.PriorityQueue`）
-  - [ ] 继承/复用 `AsyncQueue`，内部用优先队列
-- [ ] `AsyncLifoQueue<T>` 类（对应 `asyncio.LifoQueue`）
-  - [ ] 继承/复用 `AsyncQueue`，内部用栈（LIFO）
+- [x] `AsyncPriorityQueue<T>` 类（对应 `asyncio.PriorityQueue`）
+  - [x] 继承/复用 `AsyncQueue`，内部用优先队列
+  - [x] `Put(item, priority)` — 带优先级，数值越小优先级越高
+  - [x] `Get()` — 返回 `{item, priority}`
+  - [x] `PutNowait(item, priority)` / `GetNowait()` — 非阻塞版本
+- [x] `AsyncLifoQueue<T>` 类（对应 `asyncio.LifoQueue`）
+  - [x] 继承/复用 `AsyncQueue`，内部用栈（LIFO）
+  - [x] `Put(item)` / `Get()` — 标准接口
+  - [x] `PutNowait(item)` / `GetNowait()` — 非阻塞版本
 
 ---
 
@@ -546,8 +551,8 @@
 | 9. Runners（Run, Runner） | [x] **已完成** | 2026-05-08 |
 | 10. EventLoopPolicy + 全局便捷函数 | [x] **已完成** | 2026-05-08 |
 | 11. TaskGroup 结构化并发 | [x] **已完成** | 2026-05-08 |
-| 12. 低层 Socket I/O（SockRecv/SockSendall 等） | [ ] **待开始** | - |
-| 13. Queue 补充（PutNowait/GetNowait/Priority/Lifo） | [ ] **待开始** | - |
+| 12. 低层 Socket I/O + DNS 解析（GetAddrInfo/GetNameInfo） | [x] **已完成** | 2026-05-08 |
+| 13. Queue 补充（PutNowait/GetNowait/Priority/Lifo） | [x] **已完成** | 2026-05-08 |
 | 14. TimeoutAt | [ ] **待开始** | - |
 | 15. 子进程支持 | [ ] **待开始** | - |
 | 16. 信号处理 + 执行器 | [ ] **待开始** | - |

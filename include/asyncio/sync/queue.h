@@ -37,6 +37,64 @@ class AsyncQueue {
     return max_size_ > 0 && items_.size() >= max_size_;
   }
 
+  // --- Non-blocking operations ---
+
+  /// Non-blocking version of Put().
+  /// Throws QueueFullError if the queue is bounded and full.
+  /// Throws QueueShutDownError if the queue has been shut down.
+  void PutNowait(T item) {
+    if (shutdown_) throw QueueShutDownError();
+
+    // Satisfy a waiting getter if possible.
+    while (!getters_.empty() && getters_.front().Done()) {
+      getters_.pop_front();
+    }
+    if (!getters_.empty()) {
+      auto getter = std::move(getters_.front());
+      getters_.pop_front();
+      items_.push_back(std::move(item));
+      unfinished_tasks_++;
+      getter.SetResult();
+      return;
+    }
+
+    // Bounded and full — error.
+    if (max_size_ > 0 && items_.size() >= max_size_) {
+      throw QueueFullError();
+    }
+
+    // Add to queue.
+    items_.push_back(std::move(item));
+    unfinished_tasks_++;
+    ResetJoinIfNeeded();
+  }
+
+  /// Non-blocking version of Get().
+  /// Throws QueueEmptyError if the queue is empty.
+  /// Throws QueueShutDownError if the queue has been shut down and empty.
+  T GetNowait() {
+    // Try to satisfy from waiting putters first.
+    while (!putters_.empty()) {
+      auto [val, putter_fut] = std::move(putters_.front());
+      putters_.pop_front();
+      if (!putter_fut.Done()) {
+        items_.push_back(std::move(val));
+        putter_fut.SetResult();
+        break;
+      }
+    }
+
+    if (!items_.empty()) {
+      T item = std::move(items_.front());
+      items_.pop_front();
+      SatisfyPutter();
+      return item;
+    }
+
+    if (shutdown_) throw QueueShutDownError();
+    throw QueueEmptyError();
+  }
+
   // --- Async operations ---
 
   /// Removes and returns an item from the queue. If the queue is empty,

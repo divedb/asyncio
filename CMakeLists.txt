@@ -17,6 +17,7 @@ add_library(asyncio
   src/event_loop.cc
   src/policy.cc
   src/sleep.cc
+  src/dns.cc
   src/transport/protocol.cc
   src/transport/transport.cc
   src/stream/stream_reader.cc
