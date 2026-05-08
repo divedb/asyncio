@@ -112,6 +112,58 @@ class TimeoutScope {
   bool fired_ = false;
 };
 
+// ---------------------------------------------------------------------------
+// TimeoutAt — RAII guard with absolute deadline.
+// ---------------------------------------------------------------------------
+
+/// RAII guard that schedules a task cancellation at an absolute deadline.
+/// On destruction, cancels the timer and calls Uncancel() if the timeout
+/// fired.
+///
+/// Usage:
+///   Task<void> MyTask() {
+///     auto deadline = std::chrono::steady_clock::now() + 5s;
+///     TimeoutAt scope(deadline, some_task);
+///     co_await LongOperation();
+///   }
+///
+/// Note: TimeoutAt is the C++ equivalent of Python's `asyncio.timeout_at()`.
+template <typename T>
+class TimeoutAt {
+ public:
+  /// Creates a timeout scope that will cancel the given task at deadline.
+  TimeoutAt(std::chrono::steady_clock::time_point deadline, Task<T>& task)
+      : task_(&task) {
+    auto* loop = EventLoop::Current();
+    timer_ = loop->CallAt(deadline, [this]() {
+      fired_ = true;
+      task_->Cancel();
+    });
+  }
+
+  /// Cancels the timer. If the timeout fired, calls Uncancel() on the task.
+  ~TimeoutAt() {
+    timer_.Cancel();
+    if (fired_) {
+      task_->Uncancel();
+    }
+  }
+
+  /// Non-copyable, non-movable.
+  TimeoutAt(const TimeoutAt&) = delete;
+  TimeoutAt& operator=(const TimeoutAt&) = delete;
+  TimeoutAt(TimeoutAt&&) = delete;
+  TimeoutAt& operator=(TimeoutAt&&) = delete;
+
+  /// Returns true if the timeout fired and the task was cancelled.
+  [[nodiscard]] bool Fired() const { return fired_; }
+
+ private:
+  Task<T>* task_;
+  TimerHandle timer_;
+  bool fired_ = false;
+};
+
 }  // namespace asyncio
 
 #endif  // ASYNCIO_WAIT_H_

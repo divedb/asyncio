@@ -92,7 +92,7 @@
   - [x] 构造时创建定时器，到期则取消当前 Task
   - [x] 析构时调用 `Uncancel()`
   - [ ] 支持嵌套超时（需测试验证）
-- [ ] `TimeoutAt(deadline)` — 在指定绝对时间点超时（对应 `asyncio.timeout_at()`）
+- [x] `TimeoutAt(deadline)` — 绝对时间超时的 RAII 作用域（对应 `asyncio.timeout_at()`）
 - [x] `Sleep(duration)` — 异步睡眠（对应 `asyncio.sleep()`）
   - [x] `Sleep(0)` 等价于 `Yield()`（让出执行权）
 - [x] `Yield()` — 零延迟让出（对应 `asyncio.sleep(0)`）
@@ -553,7 +553,7 @@
 | 11. TaskGroup 结构化并发 | [x] **已完成** | 2026-05-08 |
 | 12. 低层 Socket I/O + DNS 解析（GetAddrInfo/GetNameInfo） | [x] **已完成** | 2026-05-08 |
 | 13. Queue 补充（PutNowait/GetNowait/Priority/Lifo） | [x] **已完成** | 2026-05-08 |
-| 14. TimeoutAt | [ ] **待开始** | - |
+| 14. TimeoutAt | [x] **已完成** | 2026-05-08 |
 | 15. 子进程支持 | [ ] **待开始** | - |
 | 16. 信号处理 + 执行器 | [ ] **待开始** | - |
 | 17. SSL/TLS + Unix Domain Socket | [ ] **待开始** | - |

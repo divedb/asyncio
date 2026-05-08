@@ -1,5 +1,5 @@
 // Copyright 2025 asyncio-cpp authors. All rights reserved.
-// Tests for WaitFor() and TimeoutScope.
+// Tests for WaitFor(), TimeoutScope, and TimeoutAt.
 
 #include <chrono>
 
@@ -196,6 +196,82 @@ TEST(TimeoutScopeTest, SlowOperationTimesOut) {
       try {
         f.Result();
       } catch (const AsyncTimeoutError&) {
+        timed_out = true;
+      }
+      loop.Stop();
+    });
+  });
+
+  loop.RunForever();
+  EXPECT_TRUE(timed_out);
+}
+
+// --- TimeoutAt ---
+
+Task<int> TimeoutAtHelper(std::chrono::nanoseconds sleep_dur,
+                          std::chrono::steady_clock::time_point deadline) {
+  auto inner_task = [&]() -> Task<int> {
+    co_await Sleep(sleep_dur);
+    co_return 42;
+  }();
+
+  TimeoutAt<int> timeout_at(deadline, inner_task);
+  co_return co_await inner_task;
+}
+
+TEST(TimeoutAtTest, FastOperationSucceeds) {
+  EventLoop loop;
+  int result = 0;
+
+  loop.CallSoon([&]() {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    auto task = TimeoutAtHelper(std::chrono::milliseconds(1), deadline);
+
+    task.AddDoneCallback([&](Future<int>& f) {
+      result = f.Result();
+      loop.Stop();
+    });
+  });
+
+  loop.RunForever();
+  EXPECT_EQ(result, 42);
+}
+
+TEST(TimeoutAtTest, SlowOperationTimesOut) {
+  EventLoop loop;
+  bool timed_out = false;
+
+  loop.CallSoon([&]() {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+    auto task = TimeoutAtHelper(std::chrono::milliseconds(500), deadline);
+
+    task.AddDoneCallback([&](Future<int>& f) {
+      try {
+        f.Result();
+      } catch (const AsyncCancelledError&) {
+        timed_out = true;
+      }
+      loop.Stop();
+    });
+  });
+
+  loop.RunForever();
+  EXPECT_TRUE(timed_out);
+}
+
+TEST(TimeoutAtTest, DeadlineInPastFiresImmediately) {
+  EventLoop loop;
+  bool timed_out = false;
+
+  loop.CallSoon([&]() {
+    // Use a deadline far in the past — should fire immediately.
+    auto deadline = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    auto task = TimeoutAtHelper(std::chrono::milliseconds(500), deadline);
+
+    task.AddDoneCallback([&](Future<int>& f) {
+      try {
+        f.Result();
+      } catch (const AsyncCancelledError&) {
         timed_out = true;
       }
       loop.Stop();
