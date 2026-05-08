@@ -98,58 +98,58 @@
 对应 Python `asyncio.sync` 相关类。
 
 #### 1.6.1 AsyncEvent
-- [ ] `AsyncEvent` 类（对应 `asyncio.Event`）
-  - [ ] `Set()` — 唤醒所有等待者
-  - [ ] `Clear()` — 重置为未触发
-  - [ ] `IsSet()` — 查询状态
-  - [ ] `Wait()` — 返回 `Future<void>`，Set() 后完成
+- [x] `AsyncEvent` 类（对应 `asyncio.Event`）
+  - [x] `Set()` — 唤醒所有等待者
+  - [x] `Clear()` — 重置为未触发
+  - [x] `IsSet()` — 查询状态
+  - [x] `Wait()` — 返回 `Future<void>`，Set() 后完成
 
 #### 1.6.2 AsyncLock
-- [ ] `AsyncLock` 类（对应 `asyncio.Lock`）
-  - [ ] `Acquire()` — 返回 `Future<Guard>`，获取锁后完成
-  - [ ] `Release()` — 释放锁，唤醒下一个等待者
-  - [ ] `Locked()` — 查询是否已锁定
-  - [ ] `Guard` RAII 类型 — 析构时自动 Release
+- [x] `AsyncLock` 类（对应 `asyncio.Lock`）
+  - [x] `Acquire()` — 返回 `Future<Guard>`，获取锁后完成
+  - [x] `Release()` — 释放锁，唤醒下一个等待者
+  - [x] `Locked()` — 查询是否已锁定
+  - [x] `Guard` RAII 类型 — 析构时自动 Release
   - [ ] `ScopedAcquire()` — 返回 `Future<Guard>` 的便捷方法
 
 #### 1.6.3 AsyncSemaphore
-- [ ] `AsyncSemaphore` 类（对应 `asyncio.Semaphore`）
-  - [ ] `AsyncSemaphore(initial)` — 构造，设置初始信号量
-  - [ ] `Acquire()` — 返回 `Future<void>`，信号量 >0 时完成
-  - [ ] `Release()` — 信号量 +1，唤醒下一个等待者
-  - [ ] `Locked()` — 查询是否还有可用信号量
-- [ ] `AsyncBoundedSemaphore` 类（对应 `asyncio.BoundedSemaphore`）
-  - [ ] 继承 `AsyncSemaphore`，Release 时检查是否超过初始值
+- [x] `AsyncSemaphore` 类（对应 `asyncio.Semaphore`）
+  - [x] `AsyncSemaphore(initial)` — 构造，设置初始信号量
+  - [x] `Acquire()` — 返回 `Future<void>`，信号量 >0 时完成
+  - [x] `Release()` — 信号量 +1，唤醒下一个等待者
+  - [x] `Locked()` — 查询是否还有可用信号量
+- [x] `AsyncBoundedSemaphore` 类（对应 `asyncio.BoundedSemaphore`）
+  - [x] 继承 `AsyncSemaphore`，Release 时检查是否超过初始值
 
 #### 1.6.4 AsyncCondition
-- [ ] `AsyncCondition` 类（对应 `asyncio.Condition`）
-  - [ ] `AsyncCondition(lock)` — 关联一个 `AsyncLock`
-  - [ ] `Acquire()` / `Release()` — 代理底层 Lock 的操作
-  - [ ] `Wait()` — 释放锁 → 等待通知 → 重新获取锁（**取消时也重新获取锁**）
-  - [ ] `Notify(n=1)` — 唤醒 n 个等待者
-  - [ ] `NotifyAll()` — 唤醒所有等待者
+- [x] `AsyncCondition` 类（对应 `asyncio.Condition`）
+  - [x] `AsyncCondition(lock)` — 关联一个 `AsyncLock`
+  - [x] `Acquire()` / `Release()` — 代理底层 Lock 的操作
+  - [x] `Wait()` — 释放锁 → 等待通知 → 重新获取锁（**取消时也重新获取锁**）
+  - [x] `Notify(n=1)` — 唤醒 n 个等待者
+  - [x] `NotifyAll()` — 唤醒所有等待者
   - [ ] `WaitFor(duration)` — 带超时的 Wait
 
 #### 1.6.5 AsyncBarrier
-- [ ] `AsyncBarrier` 类（对应 Python 3.11+ `asyncio.Barrier`）
-  - [ ] `AsyncBarrier(parties)` — 构造，设置参与方数量
-  - [ ] `Wait()` — 返回 `Future<void>`，所有参与方都调用后才完成
-  - [ ] `Abort()` — 中断 Barrier，所有等待者收到 `BrokenBarrierError`
-  - [ ] `Parties()` / `NWaiting()` — 查询状态
-  - [ ] `Reset()` — 重置 Barrier（在未 broke 状态下）
+- [x] `AsyncBarrier` 类（对应 Python 3.11+ `asyncio.Barrier`）
+  - [x] `AsyncBarrier(parties)` — 构造，设置参与方数量
+  - [x] `Wait()` — 返回 `Future<void>`，所有参与方都调用后才完成
+  - [x] `Abort()` — 中断 Barrier，所有等待者收到 `BrokenBarrierError`
+  - [x] `Parties()` / `NWaiting()` — 查询状态
+  - [x] `Reset()` — 重置 Barrier（在未 broke 状态下）
 
 #### 1.6.6 AsyncQueue / PriorityQueue / LifoQueue
-- [ ] `AsyncQueue<T>` 类（对应 `asyncio.Queue`）
-  - [ ] `AsyncQueue(max_size=0)` — 0 表示无界
-  - [ ] `Put(item)` — 满时阻塞，返回 `Future<void>`
-  - [ ] `Get()` — 空时阻塞，返回 `Future<T>`
+- [x] `AsyncQueue<T>` 类（对应 `asyncio.Queue`）
+  - [x] `AsyncQueue(max_size=0)` — 0 表示无界
+  - [x] `Put(item)` — 满时阻塞，返回 `Future<void>`
+  - [x] `Get()` — 空时阻塞，返回 `Future<T>`
   - [ ] `PutNowait(item)` — 非阻塞 Put，满时抛 `QueueFull`
   - [ ] `GetNowait()` — 非阻塞 Get，空时抛 `QueueEmpty`
-  - [ ] `QSize()` — 当前队列大小
-  - [ ] `Empty()` / `Full()` — 查询状态
-  - [ ] `TaskDone()` — 标记一个元素已处理（配合 `Join()`）
-  - [ ] `Join()` — 返回 `Future<void>`，所有 Put 的元素都被 TaskDone 后完成
-  - [ ] `Shutdown()` — 关闭队列，唤醒所有等待者并抛 `QueueShutDownError`
+  - [x] `QSize()` — 当前队列大小
+  - [x] `Empty()` / `Full()` — 查询状态
+  - [x] `TaskDone()` — 标记一个元素已处理（配合 `Join()`）
+  - [x] `Join()` — 返回 `Future<void>`，所有 Put 的元素都被 TaskDone 后完成
+  - [x] `Shutdown()` — 关闭队列，唤醒所有等待者并抛 `QueueShutDownError`
 - [ ] `AsyncPriorityQueue<T>` 类（对应 `asyncio.PriorityQueue`）
   - [ ] 继承/复用 `AsyncQueue`，内部用优先队列
 - [ ] `AsyncLifoQueue<T>` 类（对应 `asyncio.LifoQueue`）
@@ -429,12 +429,12 @@
 - [ ] `ShieldTest` — 外部取消不影响内部 Task
 - [ ] `WaitTest` / `WaitForTest` — 各策略、超时行为
 - [ ] `TimeoutScopeTest` — RAII 取消作用域、嵌套超时
-- [ ] `AsyncEventTest`
-- [ ] `AsyncLockTest` — 公平性、RAII Guard
-- [ ] `AsyncSemaphoreTest`
-- [ ] `AsyncConditionTest` — 取消时重新获取锁
-- [ ] `AsyncQueueTest` — 有界/无界、背压、Join、Shutdown
-- [ ] `AsyncBarrierTest` — 多方等待、Abort、Reset
+- [x] `AsyncEventTest`
+- [x] `AsyncLockTest` — 公平性、RAII Guard
+- [x] `AsyncSemaphoreTest`
+- [x] `AsyncConditionTest` — 取消时重新获取锁
+- [x] `AsyncQueueTest` — 有界/无界、背压、Join、Shutdown
+- [x] `AsyncBarrierTest` — 多方等待、Abort、Reset
 - [ ] `StreamReaderTest` — Read/ReadUntil/ReadExactly/ReadLine、背压
 - [ ] `StreamWriterTest` — Write/Drain、背压控制
 - [ ] `ConnectionTest` — 回环 socket 对，echo 测试
@@ -471,7 +471,7 @@
 | 0. 基础设施 | [ ] 待开始 | |
 | 1. 高层 API: Runners, Coroutines, Task | [ ] 待开始 | |
 | 2. 高层 API: 等待与组合, 超时 | [ ] 待开始 | |
-| 3. 高层 API: 同步原语 | [ ] 待开始 | |
+| 3. 高层 API: 同步原语 | [x] **已完成** | 2026-05-08 |
 | 4. 异步 I/O: Streams | [ ] 待开始 | |
 | 5. 低层 API: Event Loop, Handle, Future | [ ] 待开始 | |
 | 6. 低层 API: Transports/Protocols, Policies | [ ] 待开始 | |

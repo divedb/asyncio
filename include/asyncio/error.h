@@ -34,6 +34,20 @@ class AsyncTimeoutError : public AsyncError {
   AsyncTimeoutError() : AsyncError("Operation timed out") {}
 };
 
+/// Thrown when an AsyncBarrier is broken (abort() was called).
+/// Mirrors Python's `threading.BrokenBarrierError`.
+class BrokenBarrierError : public AsyncError {
+ public:
+  BrokenBarrierError() : AsyncError("Barrier is broken") {}
+};
+
+/// Thrown when operating on a shut-down AsyncQueue.
+/// Mirrors Python's `asyncio.QueueShutDown`.
+class QueueShutDownError : public AsyncError {
+ public:
+  QueueShutDownError() : AsyncError("Queue is shut down") {}
+};
+
 }  // namespace asyncio
 
 #endif  // ASYNCIO_ERROR_H_
