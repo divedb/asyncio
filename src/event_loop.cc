@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "asyncio/policy.h"
+
 namespace asyncio {
 
 namespace {
@@ -30,12 +32,25 @@ void EventLoop::RunForever() {
   current_loop = this;
   running_ = true;
   stopping_ = false;
+
+  // Note: The running loop is set by Run() or Runner::Run() before
+  // RunForever() is called. We only set it here if it wasn't set yet.
+  bool we_set_running_loop = (GetRunningLoop() != this);
+  if (we_set_running_loop) {
+    EventLoopPolicy::SetRunningLoop(this);
+  }
+
   while (!stopping_) {
     RunOnce();
   }
   running_ = false;
   stopping_ = false;
   current_loop = prev;
+
+  // Clear the running loop marker only if we set it.
+  if (we_set_running_loop) {
+    EventLoopPolicy::SetRunningLoop(nullptr);
+  }
 }
 
 void EventLoop::RunOnce() {
@@ -60,8 +75,10 @@ void EventLoop::RunOnce() {
       select_timeout =
           std::chrono::duration_cast<std::chrono::nanoseconds>(capped);
     }
+  } else {
+    // No ready callbacks, no timers — poll only (don't block forever).
+    select_timeout = std::chrono::nanoseconds::zero();
   }
-  // else: select_timeout remains nullopt — block indefinitely.
 
   // 3. Wait for I/O readiness (or timeout).
   auto io_events = selector_->Select(select_timeout);
@@ -242,5 +259,7 @@ void EventLoop::UpdateSelectorRegistration(int fd) {
 // --- Global access ---
 
 EventLoop* EventLoop::Current() { return current_loop; }
+
+void EventLoop::SetCurrent(EventLoop* loop) { current_loop = loop; }
 
 }  // namespace asyncio

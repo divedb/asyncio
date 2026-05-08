@@ -123,6 +123,10 @@ class EventLoop {
   /// Returns nullptr if no loop is running on this thread.
   [[nodiscard]] static EventLoop* Current();
 
+  /// Sets the event loop for the current thread.
+  /// Used internally by RunForever(); exposed for Runner/Run().
+  static void SetCurrent(EventLoop* loop);
+
  private:
   /// Drains the thread-safe queue into the ready deque.
   /// Called from RunOnce() on the event loop thread.

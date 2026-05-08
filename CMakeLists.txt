@@ -15,7 +15,13 @@ add_library(asyncio
   src/detail/self_pipe.cc
   src/detail/selector_select.cc
   src/event_loop.cc
+  src/policy.cc
   src/sleep.cc
+  src/transport/protocol.cc
+  src/transport/transport.cc
+  src/stream/stream_reader.cc
+  src/stream/stream_writer.cc
+  src/stream/connection.cc
 )
 
 # Platform-specific Selector backend.

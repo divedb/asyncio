@@ -48,6 +48,28 @@ class QueueShutDownError : public AsyncError {
   QueueShutDownError() : AsyncError("Queue is shut down") {}
 };
 
+/// Thrown when StreamReader::ReadExactly() cannot read the exact number
+/// of bytes before EOF.
+class IncompleteReadError : public AsyncError {
+ public:
+  IncompleteReadError(int expected, int actual);
+};
+
+/// Thrown when StreamReader::ReadUntil() exceeds the configured buffer
+/// limit without finding the separator.
+class LimitOverrunError : public AsyncError {
+ public:
+  explicit LimitOverrunError(const std::string& msg);
+};
+
+// Inline implementations of constructors for header-only convenience.
+inline IncompleteReadError::IncompleteReadError(int expected, int actual)
+    : AsyncError("IncompleteReadError: expected " + std::to_string(expected) +
+                 ", received " + std::to_string(actual)) {}
+
+inline LimitOverrunError::LimitOverrunError(const std::string& msg)
+    : AsyncError("LimitOverrunError: " + msg) {}
+
 }  // namespace asyncio
 
 #endif  // ASYNCIO_ERROR_H_

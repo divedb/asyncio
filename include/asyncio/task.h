@@ -50,6 +50,7 @@ struct TaskState {
 template <typename T>
 class Task : public Future<T> {
  public:
+  using inner_type = T;
   using promise_type = AsyncTaskPromise<T>;
 
   Task() = default;
@@ -58,6 +59,15 @@ class Task : public Future<T> {
   Task& operator=(const Task&) = default;
   Task(Task&&) noexcept = default;
   Task& operator=(Task&&) noexcept = default;
+
+  /// Starts the coroutine (for lazy-start coroutines).
+  /// With initial_suspend = suspend_always, the coroutine is created
+  /// suspended; call Start() to begin execution.
+  void Start() {
+    if (task_state_ && task_state_->coro) {
+      task_state_->coro.resume();
+    }
+  }
 
   /// Requests cooperative cancellation. Cancels the awaited Future, then
   /// cancels this Task's Future. Returns false if already done.
@@ -107,6 +117,9 @@ class Task : public Future<T> {
     if (task_state_) task_state_->name = std::move(name);
   }
 
+  /// Returns the task state (used by await_transform to start coroutines).
+  std::shared_ptr<TaskState>& GetTaskState() { return task_state_; }
+
  private:
   friend struct AsyncTaskPromise<T>;
 
@@ -120,6 +133,7 @@ class Task : public Future<T> {
 template <>
 class Task<void> : public Future<void> {
  public:
+  using inner_type = void;
   using promise_type = AsyncTaskPromise<void>;
 
   Task() = default;
@@ -127,6 +141,15 @@ class Task<void> : public Future<void> {
   Task& operator=(const Task&) = default;
   Task(Task&&) noexcept = default;
   Task& operator=(Task&&) noexcept = default;
+
+  /// Starts the coroutine (for lazy-start coroutines).
+  /// With initial_suspend = suspend_always, the coroutine is created
+  /// suspended; call Start() to begin execution.
+  void Start() {
+    if (task_state_ && task_state_->coro) {
+      task_state_->coro.resume();
+    }
+  }
 
   bool Cancel() {
     if (this->Done()) return false;
@@ -164,6 +187,9 @@ class Task<void> : public Future<void> {
     if (task_state_) task_state_->name = std::move(name);
   }
 
+  /// Returns the task state (used by await_transform to start coroutines).
+  std::shared_ptr<TaskState>& GetTaskState() { return task_state_; }
+
  private:
   friend struct AsyncTaskPromise<void>;
 
@@ -186,6 +212,9 @@ struct AsyncTaskPromise {
     return task_;  // Copy — shared state.
   }
 
+  /// Eager start: the coroutine body begins executing immediately when the Task
+  /// is created. The first co_await triggers the await_transform machinery.
+  /// This matches Python's eager coroutine semantics.
   std::suspend_never initial_suspend() noexcept { return {}; }
 
   auto final_suspend() noexcept {
@@ -261,6 +290,41 @@ struct AsyncTaskPromise {
     return FutureAwaiter{std::move(fut), task_.task_state_};
   }
 
+  // --- await_transform: intercept co_await of Task types ---
+  // When an outer coroutine co_awaits an inner Task<U>, the inner coroutine
+  // has already started (eager start). We just need to register the continuation.
+
+  template <typename U>
+  auto await_transform(Task<U> task) {
+    struct TaskAwaiter {
+      Task<U> task;
+      std::shared_ptr<TaskState> task_state;
+
+      [[nodiscard]] bool await_ready() { return task.Done(); }
+
+      void await_suspend(std::coroutine_handle<> caller) {
+        // Register a cancel function so Task::Cancel() can cancel this task.
+        task_state->cancel_awaited_fn = [this]() {
+          task.Cancel();
+        };
+
+        // When the task completes, resume the caller coroutine.
+        task.AddDoneCallback([caller](Future<U>&) { caller.resume(); });
+      }
+
+      auto await_resume() {
+        task_state->cancel_awaited_fn = nullptr;
+        if constexpr (std::is_void_v<U>) {
+          task.Result();  // Validates state, throws on error.
+        } else {
+          return std::move(task.Result());
+        }
+      }
+    };
+
+    return TaskAwaiter{std::move(task), task_.task_state_};
+  }
+
   /// Pass-through for non-Future awaitables.
   template <typename A>
   auto await_transform(A&& a) {
@@ -283,6 +347,9 @@ struct AsyncTaskPromise<void> {
     return task_;
   }
 
+  /// Eager start: the coroutine body begins executing immediately when the Task
+  /// is created. The first co_await triggers the await_transform machinery.
+  /// This matches Python's eager coroutine semantics.
   std::suspend_never initial_suspend() noexcept { return {}; }
 
   auto final_suspend() noexcept {
@@ -347,6 +414,41 @@ struct AsyncTaskPromise<void> {
     };
 
     return FutureAwaiter{std::move(fut), task_.task_state_};
+  }
+
+  // --- await_transform: intercept co_await of Task types ---
+  // When an outer coroutine co_awaits an inner Task<U>, the inner coroutine
+  // has already started (eager start). We just need to register the continuation.
+
+  template <typename U>
+  auto await_transform(Task<U> task) {
+    struct TaskAwaiter {
+      Task<U> task;
+      std::shared_ptr<TaskState> task_state;
+
+      [[nodiscard]] bool await_ready() { return task.Done(); }
+
+      void await_suspend(std::coroutine_handle<> caller) {
+        // Register a cancel function.
+        task_state->cancel_awaited_fn = [this]() {
+          task.Cancel();
+        };
+
+        // When the task completes, resume the caller coroutine.
+        task.AddDoneCallback([caller](Future<U>&) { caller.resume(); });
+      }
+
+      auto await_resume() {
+        task_state->cancel_awaited_fn = nullptr;
+        if constexpr (std::is_void_v<U>) {
+          task.Result();
+        } else {
+          return std::move(task.Result());
+        }
+      }
+    };
+
+    return TaskAwaiter{std::move(task), task_.task_state_};
   }
 
   template <typename A>
