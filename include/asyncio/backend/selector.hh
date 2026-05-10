@@ -1,11 +1,15 @@
 #pragma once
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "asyncio/config.hh"
@@ -21,10 +25,31 @@
 #include <ws2tcpip.h>
 using NativeHandle = SOCKET;
 inline constexpr NativeHandle kInvalidHandle = INVALID_SOCKET;
+
+inline int LastError() { return ::WSAGetLastError(); }
+
+inline void CloseHandle(NativeHandle h) noexcept {
+  if (h != INVALID_SOCKET) ::closesocket(h);
+}
+
+inline bool IsWouldBlock(int err) noexcept { return err == WSAEWOULDBLOCK; }
+
 #else
 using NativeHandle = int;
 inline constexpr NativeHandle kInvalidHandle = -1;
 #endif
+
+inline int LastError() { return errno; }
+
+inline void CloseHandle(NativeHandle h) noexcept {
+  if (h >= 0) ::close(h);
+}
+
+inline bool IsWouldBlock(int err) noexcept {
+  // EAGAIN and EWOULDBLOCK are the same value on Linux but distinct on
+  // some BSDs; check both for maximum portability.
+  return err == EAGAIN || err == EWOULDBLOCK;
+}
 
 namespace asyncio {
 
@@ -191,7 +216,7 @@ struct IoEvent {
   }
 
   /// \brief Returns `true` if the peer closed the connection or the handle
-  ///       was disconnected.
+  ///        was disconnected.
   [[nodiscard]] bool IsHungUp() const noexcept {
     return (events & IoEventFlags::kHangup) != IoEventFlags::kNone;
   }
@@ -237,11 +262,11 @@ struct SelectorCapabilities {
   /// Supports edge-triggered notifications (`kEdge`).
   bool edge_triggered{false};
 
-  /// Supports one-shot notifications (`kOneShot`).
-  bool one_shot{false};
-
   /// Supports level-triggered notifications.
   bool level_triggered{true};
+
+  /// Supports one-shot notifications (`kOneShot`).
+  bool one_shot{false};
 
   /// Supports waking a blocked `Wait()` call.
   bool wakeup{false};
@@ -420,6 +445,41 @@ class Selector {
   [[nodiscard]] virtual SelectorCapabilities Capabilities() const noexcept = 0;
 
  protected:
+  /// \brief Checks if the given handle is valid.
+  ///
+  /// \param handle The native handle to check.
+  /// \param ctx    The context in which the check is performed.
+  /// \throws       std::invalid_argument if the handle is invalid.
+  static void CheckHandle(NativeHandle handle, const char* ctx) {
+    if (handle == kInvalidHandle) {
+      throw std::invalid_argument(std::string("SelectSelector::") + ctx + ": invalid handle");
+    }
+  }
+
+  /// \brief Checks if the given events include the kReadable flag.
+  ///
+  /// \param events The I/O event flags to check.
+  /// \return       `true` if the events include the kReadable flag; otherwise `false`.
+  static bool WantsRead(IoEventFlags events) noexcept {
+    return (events & IoEventFlags::kReadable) != IoEventFlags::kNone;
+  }
+
+  /// \brief Checks if the given events include the kWritable flag.
+  ///
+  /// \param events The I/O event flags to check.
+  /// \return       `true` if the events include the kWritable flag; otherwise `false`.
+  static bool WantsWrite(IoEventFlags events) noexcept {
+    return (events & IoEventFlags::kWritable) != IoEventFlags::kNone;
+  }
+
+  /// \brief Checks if the given events include the kError flag.
+  ///
+  /// \param events The I/O event flags to check.
+  /// \return       `true` if the events include the kError flag; otherwise `false`.
+  static bool WantsExcept(IoEventFlags events) noexcept {
+    return (events & IoEventFlags::kError) != IoEventFlags::kNone;
+  }
+
   Selector() = default;
 
   /// \brief Backend-specific implementation of event selection.
@@ -432,6 +492,6 @@ class Selector {
                          std::optional<std::chrono::nanoseconds> timeout) = 0;
 };
 
-[[nodiscard]] std::unique_ptr<Selector> CreateSelector(size_t initial_capacity = 64);
+[[nodiscard]] std::unique_ptr<Selector> DefaultSelector();
 
 }  // namespace asyncio

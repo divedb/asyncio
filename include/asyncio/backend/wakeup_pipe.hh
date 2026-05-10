@@ -42,7 +42,10 @@ namespace asyncio {
 /// - ReadHandle() is intended to be registered exactly once with a selector.
 class WakeupPipe {
  public:
-  /// \brief Closes both endpoints.
+  /// \brief Constructs a new WakeupPipe instance with both endpoints initialized and ready for use.
+  WakeupPipe();
+
+  /// \brief Destroys the WakeupPipe instance, closing both the read and write endpoints.
   ~WakeupPipe();
 
   /// \brief Returns the read endpoint to register with the selector.
@@ -70,25 +73,11 @@ class WakeupPipe {
   void Drain();
 
  private:
-  friend WakeupPipe MakeWakeupPipe();
-
-  /// \brief Private constructor; instances must be created via MakeWakeupPipe().
-  WakeupPipe();
-
   /// Endpoint monitored by the selector for readability.
   NativeHandle read_handle_{kInvalidHandle};
 
   /// Endpoint used to write wakeup notifications.
   NativeHandle write_handle_{kInvalidHandle};
 };
-
-/// Creates and initializes a WakeupPipe.
-///
-/// Both endpoints are configured for non-blocking I/O and close-on-exec
-/// semantics where supported.
-///
-/// \throws std::system_error if the underlying socket pair cannot be created
-///         or configured.
-[[nodiscard]] WakeupPipe MakeWakeupPipe();
 
 }  // namespace asyncio

@@ -1,9 +1,15 @@
 #pragma once
 
-#include <array>
+#include <algorithm>
+#include <cstring>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 #include "asyncio/backend/selector.hh"
+#include "asyncio/backend/wakeup_pipe.hh"
 
 #if defined(ASYNCIO_OS_WINDOWS)
 // winsock2.h already included via selector.h
@@ -13,22 +19,11 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <unistd.h>
-
-#include <cerrno>
 #endif
-
-#include <algorithm>
-#include <cstring>
-#include <optional>
-#include <span>
-#include <stdexcept>
-#include <system_error>
-#include <unordered_map>
-#include <vector>
 
 namespace asyncio {
 
-/// Selector implementation backed by POSIX select().
+/// \brief Selector implementation backed by POSIX select().
 ///
 /// This is the portable fallback used when neither epoll nor kqueue is
 /// available. select() is limited to FD_SETSIZE (typically 1024) file
@@ -37,16 +32,11 @@ namespace asyncio {
 /// On macOS / Linux, prefer KqueueSelector or EpollSelector respectively.
 class SelectSelector final : public Selector {
  public:
-  SelectSelector() { CreateWakeupPipe(); }
-
-  ~SelectSelector() override { CloseWakeupPipe(); }
+  SelectSelector() = default;
+  ~SelectSelector() override = default;
 
   void Register(NativeHandle handle, IoEventFlags events, void* user_data) override {
     CheckHandle(handle, "Register");
-
-    if (entries_.count(handle) > 0) {
-      throw std::invalid_argument("SelectSelector::Register: handle already registered");
-    }
 
 #if defined(ASYNCIO_OS_WINDOWS)
     // https://learn.microsoft.com/en-us/windows/win32/api/winsock/ns-winsock-fd_set
@@ -60,20 +50,28 @@ class SelectSelector final : public Selector {
     // fd_count exceeds FD_SETSIZE, which is typically 64 on Windows. Reserve one slot for the
     // internal wakeup socket.
 
-    if (entries_.size() >= FD_SETSIZE - 1)
+    if (entries_.size() >= FD_SETSIZE - 1) {
       throw std::runtime_error("SelectSelector::Register: FD_SETSIZE limit reached on Windows");
+    }
+
 #else
     // The behavior of these macros is undefined if a descriptor value is less than zero or greater
     // than or equal to FD_SETSIZE, which is normally at least equal to the maximum number of
     // descriptors supported by the system.
 
-    if (handle >= FD_SETSIZE)
+    if (handle >= FD_SETSIZE) {
       throw std::runtime_error(
           "SelectSelector::Register: fd exceeds FD_SETSIZE; "
           "use EpollSelector instead");
+    }
+
 #endif
 
-    entries_[handle] = {events, user_data};
+    auto [_, inserted] = entries_.try_emplace(handle, events, user_data);
+
+    if (!inserted) {
+      throw std::invalid_argument("SelectSelector::Register: handle already registered");
+    }
   }
 
   void Modify(NativeHandle handle, IoEventFlags events) override {
@@ -90,36 +88,7 @@ class SelectSelector final : public Selector {
 
   [[nodiscard]] size_t Count() const noexcept override { return entries_.size(); }
 
-  void Interrupt() override {
-    static constexpr char kWakeByte = 1;
-
-#if defined(ASYNCIO_OS_WINDOWS)
-    const int result = ::send(wakeup_write_handle_, &kWakeByte, 1, 0);
-    if (result == 1) {
-      return;
-    }
-
-    const int error = ::WSAGetLastError();
-    if (error == WSAEWOULDBLOCK) {
-      return;
-    }
-
-    throw std::system_error(error, std::system_category(),
-                            "SelectSelector::Interrupt send failed");
-#else
-    const ssize_t result = ::write(wakeup_write_handle_, &kWakeByte, 1);
-    if (result == 1) {
-      return;
-    }
-
-    if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      return;
-    }
-
-    throw std::system_error(errno, std::generic_category(),
-                            "SelectSelector::Interrupt write failed");
-#endif
-  }
+  void Interrupt() override { wakeup_pipe_.Wakeup(); }
 
   [[nodiscard]] const char* BackendName() const noexcept override { return "select"; }
 
@@ -127,13 +96,32 @@ class SelectSelector final : public Selector {
     SelectorCapabilities caps;
     caps.level_triggered = true;
     caps.wakeup = true;
-#if defined(ASYNCIO_OS_WINDOWS)
     caps.max_handles = FD_SETSIZE > 0 ? static_cast<size_t>(FD_SETSIZE - 1) : 0;
-#endif
+
     return caps;
   }
 
  private:
+  struct FdSets {
+    fd_set read{};
+    fd_set write{};
+    fd_set except{};
+
+    FdSets() {
+      FD_ZERO(&read);
+      FD_ZERO(&write);
+      FD_ZERO(&except);
+    }
+
+    void AddRead(NativeHandle fd) noexcept { FD_SET(fd, &read); }
+    void AddWrite(NativeHandle fd) noexcept { FD_SET(fd, &write); }
+    void AddExcept(NativeHandle fd) noexcept { FD_SET(fd, &except); }
+
+    bool IsReadable(int fd) const noexcept { return FD_ISSET(fd, &read); }
+    bool IsWritable(int fd) const noexcept { return FD_ISSET(fd, &write); }
+    bool IsExcept(int fd) const noexcept { return FD_ISSET(fd, &except); }
+  };
+
   struct Entry {
     IoEventFlags events{IoEventFlags::kNone};
     void* user_data{nullptr};
@@ -141,15 +129,60 @@ class SelectSelector final : public Selector {
 
   using EntryMap = std::unordered_map<NativeHandle, Entry>;
 
-  /// \brief Checks if the given handle is valid.
+  /// \brief Builds a timeval structure from the given timeout.
   ///
-  /// \param handle The native handle to check.
-  /// \param ctx    The context in which the check is performed.
-  /// \throws       std::invalid_argument if the handle is invalid.
-  static void CheckHandle(NativeHandle handle, const char* ctx) {
-    if (handle == kInvalidHandle) {
-      throw std::invalid_argument(std::string("SelectSelector::") + ctx + ": invalid handle");
+  /// \param timeout The optional timeout value.
+  /// \param storage The timeval structure to populate.
+  /// \return        A pointer to the populated timeval structure, or nullptr if no timeout is
+  ///                specified.
+  static timeval* BuildTimeout(std::optional<std::chrono::nanoseconds> timeout, timeval& storage) {
+    if (!timeout.has_value()) return nullptr;
+
+    const auto clamped = std::max(*timeout, std::chrono::nanoseconds::zero());
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(clamped);
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(clamped - secs);
+
+    storage.tv_sec = static_cast<decltype(storage.tv_sec)>(secs.count());
+    storage.tv_usec = static_cast<decltype(storage.tv_usec)>(micros.count());
+
+    return &storage;
+  }
+
+  /// \brief Calls the select() system call with the given fd_sets and timeout, handling EINTR
+  ///        appropriately.
+  ///
+  /// \param fds        The FdSets structure containing the file descriptors to monitor.
+  /// \param max_handle The maximum handle value.
+  /// \param tv_ptr     A pointer to the timeval structure specifying the timeout.
+  /// \return           The number of ready file descriptors.
+  static int CallSelect(FdSets& fds, NativeHandle max_handle, timeval* tv_ptr) {
+#if defined(ASYNCIO_OS_WINDOWS)
+    const int ready = ::select(0, &fds.read, &fds.write, &fds.except, tv_ptr);
+
+    if (ready == SOCKET_ERROR) {
+      throw std::system_error(LastError(), std::system_category(),
+                              "SelectSelector::Select select failed");
     }
+
+#else
+    // Retry on EINTR — select() can be interrupted by signals (e.g. SIGCHLD,
+    // debugger attach, etc.). On timeout we loop only if the caller specified
+    // a deadline, preserving the original remaining time for each retry.
+    int ready;
+    const int max_fd = static_cast<int>(max_handle) + 1;
+
+    for (;;) {
+      ready = ::select(max_fd, &fds.read, &fds.write, &fds.except, tv_ptr);
+
+      if (ready >= 0) break;
+      if (errno == EINTR) continue;
+
+      throw std::system_error(errno, std::system_category(),
+                              "SelectSelector::Select select failed");
+    }
+
+#endif
+    return ready;
   }
 
   /// \brief Retrieves an iterator to the entry for the given handle, ensuring it is registered.
@@ -169,299 +202,78 @@ class SelectSelector final : public Selector {
     return it;
   }
 
-  [[nodiscard]] static bool WantsRead(IoEventFlags events) noexcept {
-    return (events & (IoEventFlags::kReadable | IoEventFlags::kHangup)) != IoEventFlags::kNone;
-  }
-
-  [[nodiscard]] static bool WantsWrite(IoEventFlags events) noexcept {
-    return (events & IoEventFlags::kWritable) != IoEventFlags::kNone;
-  }
-
-  [[nodiscard]] static bool WantsExcept(IoEventFlags events) noexcept {
-    return (events & (IoEventFlags::kError | IoEventFlags::kHangup)) != IoEventFlags::kNone;
-  }
-
-  int SelectImpl(std::span<IoEvent> out,
-                 std::optional<std::chrono::nanoseconds> timeout) override {
-    fd_set read_fds;
-    fd_set write_fds;
-    fd_set except_fds;
-    FD_ZERO(&read_fds);
-    FD_ZERO(&write_fds);
-    FD_ZERO(&except_fds);
-
-    FD_SET(wakeup_read_handle_, &read_fds);
-    NativeHandle max_handle = wakeup_read_handle_;
-
+  /// \brief Populates the given fd_set structures based on the registered entries and updates
+  ///        max_handle.
+  ///
+  /// \param read_fds   The fd_set to populate with read events.
+  /// \param write_fds  The fd_set to populate with write events.
+  /// \param except_fds The fd_set to populate with except events.
+  /// \param max_handle The current maximum handle value, which will be updated if higher handles
+  ///                   are found.
+  void PopulateFdSets(FdSets& fds, NativeHandle& max_handle) const noexcept {
     for (const auto& [handle, entry] : entries_) {
-      if (WantsRead(entry.events)) {
-        FD_SET(handle, &read_fds);
-      }
-      if (WantsWrite(entry.events)) {
-        FD_SET(handle, &write_fds);
-      }
-      if (WantsExcept(entry.events)) {
-        FD_SET(handle, &except_fds);
-      }
-      if (handle > max_handle) {
-        max_handle = handle;
-      }
+      if (WantsRead(entry.events)) fds.AddRead(handle);
+      if (WantsWrite(entry.events)) fds.AddWrite(handle);
+      if (WantsExcept(entry.events)) fds.AddExcept(handle);
+      if (handle > max_handle) max_handle = handle;
     }
+  }
 
-    timeval tv_storage{};
-    timeval* tv_ptr = nullptr;
-    if (timeout.has_value()) {
-      const auto clamped = std::max(timeout.value(), std::chrono::nanoseconds::zero());
-      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(clamped);
-      const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(clamped - secs);
-      tv_storage.tv_sec = static_cast<decltype(tv_storage.tv_sec)>(secs.count());
-      tv_storage.tv_usec = static_cast<decltype(tv_storage.tv_usec)>(micros.count());
-      tv_ptr = &tv_storage;
-    }
+  /// \brief Determines the triggered I/O events for the given handle.
+  ///
+  /// \param fds        The FdSets structure containing the results from select().
+  /// \param handle     The native handle to check.
+  /// \return           The triggered I/O event flags.
+  static IoEventFlags GetTriggeredFlags(const FdSets& fds, NativeHandle handle) noexcept {
+    IoEventFlags flags = IoEventFlags::kNone;
 
-#if defined(ASYNCIO_OS_WINDOWS)
-    const int ready = ::select(0, &read_fds, &write_fds, &except_fds, tv_ptr);
-    if (ready == SOCKET_ERROR) {
-      throw std::system_error(::WSAGetLastError(), std::system_category(),
-                              "SelectSelector::Select select failed");
-    }
-#else
-    const int ready = ::select(static_cast<int>(max_handle + 1), &read_fds, &write_fds, &except_fds,
-                               tv_ptr);
-    if (ready < 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::Select select failed");
-    }
-#endif
+    if (fds.IsReadable(handle)) flags |= IoEventFlags::kReadable;
+    if (fds.IsWritable(handle)) flags |= IoEventFlags::kWritable;
+    if (fds.IsExcept(handle)) flags |= IoEventFlags::kError;
 
-    if (ready == 0) {
-      return 0;
-    }
+    return flags;
+  }
 
-    if (FD_ISSET(wakeup_read_handle_, &read_fds)) {
-      DrainWakeupPipe();
-    }
-
+  /// \brief Collects triggered events into the output span based on the fd_set results.
+  ///
+  /// \param fds The FdSets structure containing the results from select().
+  /// \param out The output span to populate with triggered events.
+  /// \return    The number of events collected into the output span.
+  int CollectEvents(const FdSets& fds, std::span<IoEvent> out) const noexcept {
     int produced = 0;
+
     for (const auto& [handle, entry] : entries_) {
-      if (produced >= static_cast<int>(out.size())) {
-        break;
-      }
+      if (produced >= static_cast<int>(out.size())) break;
 
-      IoEventFlags triggered = IoEventFlags::kNone;
-      if (FD_ISSET(handle, &read_fds)) {
-        triggered |= IoEventFlags::kReadable;
-      }
-      if (FD_ISSET(handle, &write_fds)) {
-        triggered |= IoEventFlags::kWritable;
-      }
-      if (FD_ISSET(handle, &except_fds)) {
-        triggered |= IoEventFlags::kError;
-      }
+      const auto flags = GetTriggeredFlags(fds, handle);
 
-      if (triggered == IoEventFlags::kNone) {
-        continue;
-      }
+      if (flags == IoEventFlags::kNone) continue;
 
-      out[produced++] = IoEvent{handle, triggered, entry.user_data};
+      out[produced++] = IoEvent{handle, flags, entry.user_data};
     }
 
     return produced;
   }
 
-  void CreateWakeupPipe() {
-#if defined(ASYNCIO_OS_WINDOWS)
-    SOCKET listener = INVALID_SOCKET;
-    SOCKET writer = INVALID_SOCKET;
-    SOCKET reader = INVALID_SOCKET;
+  int SelectImpl(std::span<IoEvent> out, std::optional<std::chrono::nanoseconds> timeout) override {
+    FdSets fds;
+    fds.AddRead(wakeup_pipe_.ReadHandle());
+    NativeHandle max_handle = wakeup_pipe_.ReadHandle();
+    PopulateFdSets(fds, max_handle);
 
-    try {
-      listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-      if (listener == INVALID_SOCKET) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe socket failed");
-      }
+    timeval tv{};
+    timeval* tv_ptr = BuildTimeout(timeout, tv);
+    int nready = CallSelect(fds, max_handle, tv_ptr);
 
-      sockaddr_in addr{};
-      addr.sin_family = AF_INET;
-      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      addr.sin_port = 0;
+    if (nready == 0) return 0;
 
-      if (::bind(listener, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe bind failed");
-      }
+    if (fds.IsReadable(wakeup_pipe_.ReadHandle())) wakeup_pipe_.Drain();
 
-      if (::listen(listener, 1) == SOCKET_ERROR) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe listen failed");
-      }
-
-      sockaddr_in bound_addr{};
-      int bound_len = sizeof(bound_addr);
-      if (::getsockname(listener, reinterpret_cast<sockaddr*>(&bound_addr), &bound_len) ==
-          SOCKET_ERROR) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe getsockname failed");
-      }
-
-      writer = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-      if (writer == INVALID_SOCKET) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe socket failed");
-      }
-
-      if (::connect(writer, reinterpret_cast<const sockaddr*>(&bound_addr), sizeof(bound_addr)) ==
-          SOCKET_ERROR) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe connect failed");
-      }
-
-      reader = ::accept(listener, nullptr, nullptr);
-      if (reader == INVALID_SOCKET) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe accept failed");
-      }
-
-      u_long non_blocking = 1;
-      if (::ioctlsocket(reader, FIONBIO, &non_blocking) == SOCKET_ERROR ||
-          ::ioctlsocket(writer, FIONBIO, &non_blocking) == SOCKET_ERROR) {
-        throw std::system_error(::WSAGetLastError(), std::system_category(),
-                                "SelectSelector::CreateWakeupPipe ioctlsocket failed");
-      }
-
-      wakeup_read_handle_ = reader;
-      wakeup_write_handle_ = writer;
-      ::closesocket(listener);
-    } catch (...) {
-      if (listener != INVALID_SOCKET) {
-        ::closesocket(listener);
-      }
-      if (reader != INVALID_SOCKET) {
-        ::closesocket(reader);
-      }
-      if (writer != INVALID_SOCKET) {
-        ::closesocket(writer);
-      }
-      throw;
-    }
-#else
-    int fds[2];
-#if defined(ASYNCIO_OS_LINUX) && defined(O_CLOEXEC) && defined(O_NONBLOCK)
-    if (::pipe2(fds, O_CLOEXEC | O_NONBLOCK) == 0) {
-      wakeup_read_handle_ = fds[0];
-      wakeup_write_handle_ = fds[1];
-      return;
-    }
-    if (errno != ENOSYS && errno != EINVAL) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::CreateWakeupPipe pipe2 failed");
-    }
-#endif
-    if (::pipe(fds) != 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::CreateWakeupPipe pipe failed");
-    }
-
-    try {
-      SetNonBlocking(fds[0]);
-      SetNonBlocking(fds[1]);
-      SetCloseOnExec(fds[0]);
-      SetCloseOnExec(fds[1]);
-    } catch (...) {
-      ::close(fds[0]);
-      ::close(fds[1]);
-      throw;
-    }
-
-    wakeup_read_handle_ = fds[0];
-    wakeup_write_handle_ = fds[1];
-#endif
+    return CollectEvents(fds, out);
   }
-
-  void DrainWakeupPipe() noexcept {
-#if defined(ASYNCIO_OS_WINDOWS)
-    std::array<char, 256> buffer{};
-    while (true) {
-      const int result = ::recv(wakeup_read_handle_, buffer.data(), static_cast<int>(buffer.size()), 0);
-      if (result > 0) {
-        continue;
-      }
-      if (result == 0) {
-        break;
-      }
-      const int error = ::WSAGetLastError();
-      if (error == WSAEWOULDBLOCK) {
-        break;
-      }
-      break;
-    }
-#else
-    std::array<char, 256> buffer{};
-    while (true) {
-      const ssize_t result = ::read(wakeup_read_handle_, buffer.data(), buffer.size());
-      if (result > 0) {
-        continue;
-      }
-      if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        break;
-      }
-      break;
-    }
-#endif
-  }
-
-  void CloseWakeupPipe() noexcept {
-#if defined(ASYNCIO_OS_WINDOWS)
-    if (wakeup_read_handle_ != kInvalidHandle) {
-      ::closesocket(wakeup_read_handle_);
-      wakeup_read_handle_ = kInvalidHandle;
-    }
-    if (wakeup_write_handle_ != kInvalidHandle) {
-      ::closesocket(wakeup_write_handle_);
-      wakeup_write_handle_ = kInvalidHandle;
-    }
-#else
-    if (wakeup_read_handle_ != kInvalidHandle) {
-      ::close(wakeup_read_handle_);
-      wakeup_read_handle_ = kInvalidHandle;
-    }
-    if (wakeup_write_handle_ != kInvalidHandle) {
-      ::close(wakeup_write_handle_);
-      wakeup_write_handle_ = kInvalidHandle;
-    }
-#endif
-  }
-
-#if !defined(ASYNCIO_OS_WINDOWS)
-  static void SetNonBlocking(int fd) {
-    const int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::SetNonBlocking F_GETFL failed");
-    }
-    if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::SetNonBlocking F_SETFL failed");
-    }
-  }
-
-  static void SetCloseOnExec(int fd) {
-    const int flags = ::fcntl(fd, F_GETFD, 0);
-    if (flags < 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::SetCloseOnExec F_GETFD failed");
-    }
-    if (::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) != 0) {
-      throw std::system_error(errno, std::generic_category(),
-                              "SelectSelector::SetCloseOnExec F_SETFD failed");
-    }
-  }
-#endif
 
   EntryMap entries_;
-  NativeHandle wakeup_read_handle_{kInvalidHandle};
-  NativeHandle wakeup_write_handle_{kInvalidHandle};
+  WakeupPipe wakeup_pipe_;
 };
 
 }  // namespace asyncio

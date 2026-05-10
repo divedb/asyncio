@@ -1,10 +1,19 @@
 #include "asyncio/backend/wakeup_pipe.hh"
 
+#include <array>
+#include <system_error>
+
+#if !defined(ASYNCIO_WINDOWS)
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+
 namespace {
 
 #if defined(ASYNCIO_WINDOWS)
-
-inline int LastError() { return ::WSAGetLastError(); }
 
 struct WsaGuard {
   WsaGuard() {
@@ -82,12 +91,12 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
   addr.sin_port = 0;
 
   if (::bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-    ::closesocket(listener);
+    CloseHandle(listener);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: bind");
   }
 
   if (::listen(listener, 1) == SOCKET_ERROR) {
-    ::closesocket(listener);
+    CloseHandle(listener);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: listen");
   }
 
@@ -95,7 +104,7 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
   int addrlen = static_cast<int>(sizeof(addr));
 
   if (::getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &addrlen) == SOCKET_ERROR) {
-    ::closesocket(listener);
+    CloseHandle(listener);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: getsockname");
   }
 
@@ -103,22 +112,22 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
   SOCKET writer = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
   if (writer == INVALID_SOCKET) {
-    ::closesocket(listener);
+    CloseHandle(listener);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: socket (writer)");
   }
 
   if (::connect(writer, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-    ::closesocket(writer);
-    ::closesocket(listener);
+    CloseHandle(writer);
+    CloseHandle(listener);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: connect");
   }
 
   // Accept the read end.
   SOCKET reader = ::accept(listener, nullptr, nullptr);
-  ::closesocket(listener);  // listener is done regardless of accept result
+  CloseHandle(listener);  // listener is done regardless of accept result
 
   if (reader == INVALID_SOCKET) {
-    ::closesocket(writer);
+    CloseHandle(writer);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: accept");
   }
 
@@ -127,8 +136,8 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
 
   if (::ioctlsocket(reader, FIONBIO, &nb) == SOCKET_ERROR ||
       ::ioctlsocket(writer, FIONBIO, &nb) == SOCKET_ERROR) {
-    ::closesocket(reader);
-    ::closesocket(writer);
+    CloseHandle(reader);
+    CloseHandle(writer);
     throw std::system_error(LastError(), std::system_category(), "WakeupPipe: ioctlsocket FIONBIO");
   }
 
@@ -144,17 +153,7 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
   write_sock = writer;
 }
 
-inline void CloseHandle(NativeHandle h) noexcept {
-  if (h != INVALID_SOCKET) ::closesocket(h);
-}
-
-inline bool IsWouldBlock(int err) noexcept { return err == WSAEWOULDBLOCK; }
-
 #else
-
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 /// socketpair(AF_UNIX, SOCK_STREAM, 0, sv) creates a bidirectional pair of
 /// connected UNIX-domain stream sockets.
@@ -213,8 +212,8 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
     SetNonblockingCloexec(sv[0]);
     SetNonblockingCloexec(sv[1]);
   } catch (...) {
-    ::close(sv[0]);
-    ::close(sv[1]);
+    CloseHandle(sv[0]);
+    CloseHandle(sv[1]);
     throw;
   }
 
@@ -223,23 +222,9 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
 #endif
 }
 
-inline void CloseHandle(NativeHandle h) noexcept {
-  if (h >= 0) ::close(h);
-}
-
-inline bool IsWouldBlock(int err) noexcept {
-  // EAGAIN and EWOULDBLOCK are the same value on Linux but distinct on
-  // some BSDs; check both for maximum portability.
-  return err == EAGAIN || err == EWOULDBLOCK;
-}
-
 #endif  // ASYNCIO_WINDOWS / ASYNCIO_POSIX
 
 }  // namespace
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WakeupPipe implementation
-// ─────────────────────────────────────────────────────────────────────────────
 
 namespace asyncio {
 
@@ -275,9 +260,11 @@ void WakeupPipe::Wakeup() {
 #endif
   if (r < 0) {
     int err = errno;
-    if (!IsWouldBlock(err))
+
+    if (!IsWouldBlock(err)) {
+      // EAGAIN: send buffer is full; a byte is already pending — no action needed.
       throw std::system_error(err, std::generic_category(), "WakeupPipe::Wakeup write");
-    // EAGAIN: send buffer is full; a byte is already pending — no action needed.
+    }
   }
 #endif
 }
@@ -313,7 +300,5 @@ void WakeupPipe::Drain() {
     if (n == 0) break;  // peer closed (shouldn't happen; write end is ours)
   }
 }
-
-WakeupPipe MakeWakeupPipe() { return WakeupPipe{}; }
 
 }  // namespace asyncio
