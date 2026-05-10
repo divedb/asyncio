@@ -25,6 +25,7 @@ add_library(asyncio
   src/stream/connection.cc
   src/socket/socket_base.cc
   src/socket/socket_ops.cc
+  src/subprocess.cc
 )
 
 # Platform-specific Selector backend.

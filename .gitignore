@@ -1,6 +1,9 @@
 build
+.workbuddy
 .claude
 .claude-*
 .idea
 *.iml
 *.log
+.gitignore
+.DS_Store

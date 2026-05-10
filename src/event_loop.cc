@@ -3,6 +3,7 @@
 #include "asyncio/event_loop.h"
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 
 #include "asyncio/policy.h"
@@ -31,7 +32,6 @@ void EventLoop::RunForever() {
   auto* prev = current_loop;
   current_loop = this;
   running_ = true;
-  stopping_ = false;
 
   // Note: The running loop is set by Run() or Runner::Run() before
   // RunForever() is called. We only set it here if it wasn't set yet.
@@ -43,8 +43,12 @@ void EventLoop::RunForever() {
   while (!stopping_) {
     RunOnce();
   }
-  running_ = false;
+
+  // Reset stopping_ after the loop finishes (matches Python's behavior).
+  // This allows Stop() to be called before RunForever() and still work.
   stopping_ = false;
+
+  running_ = false;
   current_loop = prev;
 
   // Clear the running loop marker only if we set it.
@@ -56,6 +60,12 @@ void EventLoop::RunForever() {
 void EventLoop::RunOnce() {
   // 1. Clean up cancelled timers (lazy, amortized).
   scheduled_.MaybeRebuild();
+
+  // Early exit if we're stopping and have no pending callbacks.
+  // Don't wait for scheduled timers - they're not urgent when stopping.
+  if (stopping_ && ready_.empty()) {
+    return;
+  }
 
   // 2. Compute how long the selector should wait for I/O events.
   std::optional<std::chrono::nanoseconds> select_timeout;
@@ -80,8 +90,14 @@ void EventLoop::RunOnce() {
     select_timeout = std::chrono::nanoseconds::zero();
   }
 
+  // Check if we should stop before blocking.
+  if (stopping_) return;
+
   // 3. Wait for I/O readiness (or timeout).
   auto io_events = selector_->Select(select_timeout);
+
+  // Check if we should stop after blocking.
+  if (stopping_) return;
 
   // 4. Dispatch I/O events.
   for (const auto& ev : io_events) {
@@ -137,6 +153,8 @@ bool EventLoop::IsRunning() const { return running_; }
 Handle EventLoop::CallSoon(std::function<void()> callback) {
   Handle handle(std::move(callback));
   ready_.push_back(handle);  // Copy — shared state.
+  // Wake up the selector so it can process this callback.
+  self_pipe_.Wakeup();
   return handle;
 }
 
@@ -222,6 +240,8 @@ void EventLoop::DrainThreadSafeQueue() {
 }
 
 void EventLoop::ProcessTimers() {
+  if (stopping_) return;  // Don't process timers when stopping.
+
   auto now = Time();
   while (!scheduled_.Empty()) {
     // Peek at the earliest deadline.
