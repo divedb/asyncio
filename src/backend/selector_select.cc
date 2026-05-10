@@ -1,6 +1,4 @@
-// Copyright 2025 asyncio-cpp authors. All rights reserved.
-
-#include "asyncio/detail/selector_select.h"
+#include "asyncio/backend/selector_select.hh"
 
 #include <sys/select.h>
 
@@ -10,28 +8,25 @@
 
 namespace asyncio::detail {
 
+void SelectSelector::Register(NativeHandle handle, IoEventFlags events, void* user_data) {}
+
 void SelectSelector::Register(int fd, uint32_t events) {
   if (fd < 0 || fd >= FD_SETSIZE) {
-    throw std::invalid_argument(
-        "SelectSelector::Register: fd out of range for select()");
+    throw std::invalid_argument("SelectSelector::Register: fd out of range for select()");
   }
   registered_[fd] = events;
 }
 
 void SelectSelector::Modify(int fd, uint32_t new_events) {
   if (registered_.find(fd) == registered_.end()) {
-    throw std::invalid_argument(
-        "SelectSelector::Modify: fd not registered");
+    throw std::invalid_argument("SelectSelector::Modify: fd not registered");
   }
   registered_[fd] = new_events;
 }
 
-void SelectSelector::Unregister(int fd) {
-  registered_.erase(fd);
-}
+void SelectSelector::Unregister(int fd) { registered_.erase(fd); }
 
-std::vector<IoEvent> SelectSelector::Select(
-    std::optional<std::chrono::nanoseconds> timeout) {
+std::vector<IoEvent> SelectSelector::Select(std::optional<std::chrono::nanoseconds> timeout) {
   fd_set read_fds;
   fd_set write_fds;
   FD_ZERO(&read_fds);
@@ -61,8 +56,7 @@ std::vector<IoEvent> SelectSelector::Select(
 
   if (nready < 0) {
     if (errno == EINTR) return {};
-    throw std::system_error(errno, std::generic_category(),
-                            "SelectSelector: select() failed");
+    throw std::system_error(errno, std::generic_category(), "SelectSelector: select() failed");
   }
 
   std::vector<IoEvent> result;

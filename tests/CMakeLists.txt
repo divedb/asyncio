@@ -11,27 +11,33 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest)
 
-# Collect all test sources
+# Collect all test sources.
 file(GLOB_RECURSE ASYNCIO_TEST_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cc"
 )
 
-add_executable(asyncio_tests ${ASYNCIO_TEST_SOURCES})
-
-target_link_libraries(asyncio_tests PRIVATE
-  asyncio
-  GTest::gtest_main
-)
-
-target_compile_options(asyncio_tests PRIVATE
-  -Wall -Wextra -Wpedantic -Werror
-)
-
-# Sanitizer flags for Debug builds
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  target_compile_options(asyncio_tests PRIVATE -fsanitize=address,undefined)
-  target_link_options(asyncio_tests PRIVATE -fsanitize=address,undefined)
-endif()
-
 include(GoogleTest)
-gtest_discover_tests(asyncio_tests)
+
+foreach(test_src IN LISTS ASYNCIO_TEST_SOURCES)
+  get_filename_component(test_name "${test_src}" NAME_WE)
+
+  add_executable(${test_name} "${test_src}")
+
+  if(test_name STREQUAL "wakeup_pipe_test")
+    target_link_libraries(${test_name} PRIVATE asyncio GTest::gtest)
+  else()
+    target_link_libraries(${test_name} PRIVATE asyncio GTest::gtest_main)
+  endif()
+
+  target_compile_options(${test_name} PRIVATE
+    -Wall -Wextra -Wpedantic -Werror
+  )
+
+  # Sanitizer flags for Debug builds
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(${test_name} PRIVATE -fsanitize=address,undefined)
+    target_link_options(${test_name} PRIVATE -fsanitize=address,undefined)
+  endif()
+
+  gtest_discover_tests(${test_name})
+endforeach()

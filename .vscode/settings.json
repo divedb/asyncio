@@ -1,0 +1,7 @@
+{
+    "editor.formatOnSave": true,
+    "clang-format.executable": "/usr/local/opt/llvm/bin/clang-format",
+    "[cpp]": {
+        "editor.defaultFormatter": "xaver.clang-format"
+    },
+}

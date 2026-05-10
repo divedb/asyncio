@@ -1,0 +1,1 @@
+execlp底层如何实现task_struct，哪些部分会覆盖掉，execlp是kernel加载sleep这个程序到内存中，task_struct memory fdtables需要修改么
