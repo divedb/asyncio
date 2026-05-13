@@ -172,7 +172,7 @@ void MakeSocketPair(NativeHandle& read_sock, NativeHandle& write_sock) {
 ///   macOS / BSD do not support these socketpair() type flags, so we fall back
 ///   to separate fcntl() calls. That fallback is safe as long as no concurrent
 ///   fork+exec can happen before FD_CLOEXEC is installed.
-void SetNonblockingCloexec(int fd) {
+[[maybe_unused]] void SetNonblockingCloexec(int fd) {
   // FD_CLOEXEC — close on exec(2), prevents the fd leaking into child
   // processes spawned after the event loop is running.
   if (::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {

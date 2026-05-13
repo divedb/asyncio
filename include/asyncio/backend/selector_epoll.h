@@ -122,7 +122,7 @@ class EpollSelector final : public Selector {
 
     epoll_event ev = MakeEpollEvent(handle, events);
 
-    if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, handle, &ev) != 0) {
+    if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, handle, &ev) != 0) {
       const int err = errno;
       entries_.erase(it);
 
@@ -205,7 +205,7 @@ class EpollSelector final : public Selector {
   int WaitForEvents(epoll_event* buf, int max_events,
                     std::optional<std::chrono::nanoseconds> timeout) {
     for (;;) {
-      const int n = ::epoll_wait(epoll_fd_.get(), buf, max_events, ToTimeoutMs(timeout));
+      const int n = ::epoll_wait(epoll_fd_, buf, max_events, ToTimeoutMs(timeout));
 
       if (n >= 0) return n;
       if (errno == EINTR) continue;
